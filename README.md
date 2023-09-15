@@ -17,11 +17,6 @@ CREATE OR REPLACE NETWORK RULE My_outbounb_network_rule
 
 
 
-
-
-
-
-
 ### Demo 1 : Sending Announcement messages to Alexa
 
 You will be able to send text messages to Alexa to announce via this external function using an intermediate API service from VoiceMonkey.io
@@ -133,5 +128,86 @@ insert into wiki_websites values ('BMW'), ('Snowflake_Inc.'), ('Hard_Rock_Cafe')
 select * from wiki_websites;
 
 select topic, wiki_via_python(topic) from wiki_websites;
+~~~
+
+
+### Demo 3 : US Address standardization using Smarty.com API REST service.
+
+You will be able to send full of partial US Addresses to Smart.com to get the Standardized USPS version along with additional meta-data like Lat & Long coordinates, Property Type(Commercial, Residential & etc.)
+
+Prerequisites:
+1. Register a free account with https://www.smarty.com/docs/cloud/us-street-api
+2. Get your API key info (auth-id & auto-token)
+
+~~~ SQL
+--  US ADDRESS LOOKUP
+
+CREATE OR REPLACE SECRET streets_api
+  TYPE = GENERIC_STRING
+  SECRET_STRING = 'auth-id=aba.....773c&auth-token=r8FvKP....IpuI';  --  <YOUR API KEY VALUES HERE>
+
+
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION streets_access_integration
+  ALLOWED_NETWORK_RULES = (My_outbounb_network_rule)
+  ALLOWED_AUTHENTICATION_SECRETS = (streets_api)
+  ENABLED = true;
+
+
+CREATE OR REPLACE FUNCTION us_address(MyAddress STRING)
+RETURNS STRING
+LANGUAGE PYTHON
+RUNTIME_VERSION = 3.8
+HANDLER = 'get_page'
+EXTERNAL_ACCESS_INTEGRATIONS = (streets_access_integration)
+PACKAGES = ('requests', 'beautifulsoup4')
+SECRETS = ('accesskey' = streets_api )
+AS
+$$
+import _snowflake
+import requests
+from bs4 import BeautifulSoup
+
+session = requests.Session()
+mytoken = _snowflake.get_generic_secret_string('accesskey')
+
+def get_page(MyAddress):
+  url = f"https://us-street.api.smarty.com/street-address?{mytoken}&license=us-core-cloud&street={MyAddress}"
+  response = session.get(url)
+  output = response.text.replace("[", "")
+  output = output.replace("]", "")
+  return output
+$$;
+
+select us_address('22 Degroat Road , Sandyston, nj');
+
+create or replace table AddressList
+(
+    AddressOriginal string,
+    AddressRaw variant,
+    AddressNew string
+);
+
+
+insert into addresslist values 
+('22 Degroat Road , Sandyston, nj', NULL, NULL),
+('3331 Erie Avenue, Cincinnati, OH ', NULL, NULL),
+('525 South Winchester Boulevard, 95128 ', NULL, NULL);
+
+select * from addresslist;
+
+-- Update the addressList table with full raw Json response packet received for each address.
+UPDATE addresslist
+SET AddressRaw = parse_json( us_address(AddressOriginal) );
+
+-- Use standard Snowflake SQL Semi-Structured data functions to parse & split the json values in to individual columns.
+select 
+    addressoriginal,  
+    addressraw:delivery_line_1::string || ', ' || addressraw:last_line::string as NewAddress, 
+    addressraw:metadata:latitude as lat , 
+    addressraw:metadata:longitude as long,
+    addressraw:metadata:rdi::string as ZoningType,
+    addressraw
+from addresslist ;
+
 ~~~
 
