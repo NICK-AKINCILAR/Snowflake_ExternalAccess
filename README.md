@@ -211,3 +211,47 @@ from addresslist ;
 
 ~~~
 
+
+### Creating & Registering external functions via Python Snowpark
+
+Following code shows how you can create the identical call_Alexa function from Demo1 using Python & Snowpark. Stage location needs to be a valid internal or external Snowflake stage.
+
+~~~ Python
+session.add_packages("requests")
+
+def call_Alexa(topic: str)  -> str:
+  import requests
+  import _snowflake
+  mysession = requests.Session()
+  mytoken = _snowflake.get_generic_secret_string('cred')
+  url = f"https://api-v2.voicemonkey.io/announcement?token={mytoken}&device=myechodot&text={topic}"
+  response = mysession.get(url)
+  return response.text
+
+
+
+CallAlexa_udf = session.udf.register(call_Alexa, name="call_Alexa", is_permanent=True, replace=True, 
+                                      external_access_integrations=["voicemonkey_access_integration"],
+                                      secrets={"cred": "deletethis.public.voicemonkey_api"},
+                                      stage_location="@DEMO_SNOWPARK.Public.PythonUDF_Stage/PythonUDFS")
+
+~~~
+
+Test your function via Snowpark
+
+~~~ Python
+import pandas as pd
+  
+# initialize list elements
+data = ['Snowflake is calling']
+
+df_panda = pd.DataFrame(data, columns=['MESSAGES'])
+
+df_snowpark = session.create_dataframe(df_panda)
+df_snowpark.show()
+
+df_snowpark = df_snowpark.group_by(col("MESSAGES")).agg( CallAlexa_udf( col("MESSAGES") ).alias("Result"))
+
+df_snowpark.show()
+
+~~~
